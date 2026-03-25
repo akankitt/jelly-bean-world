@@ -90,11 +90,35 @@ class ContextualVolatilityWrapper:
         # In a real infinite grid, you'd only track beans near the agent (Lazy Evaluation)
         self.active_beans = {} 
 
+
+    def _inject_weather_into_obs(self, obs):
+        """
+        Appends the current weather context to the observation space so 
+        the RL agent isn't 'blind' compared to a human player.
+        """
+        if obs is None:
+            return None
+            
+        weather_val = self.current_weather.value  # 0 for BLUE, 1 for RED, 2 for GREY
+        
+        # If the environment uses dictionary observations (like your Mock Env)
+        if isinstance(obs, dict):
+            obs['weather_context'] = weather_val
+            
+        # If the environment uses flattened NumPy arrays (Standard RL)
+        elif isinstance(obs, np.ndarray):
+            obs = np.append(obs, weather_val)
+            
+        # If it's a standard Python list
+        elif isinstance(obs, list):
+            obs.append(weather_val)
+            
+        return obs
+
     def reset(self):
         """Resets the environment, weather, and beans."""
         if self.env:
             obs = self.env.reset()
-            # Query JBW for agent starting position
             self.agent_pos = self._get_agent_position()
         else:
             obs = None
@@ -103,13 +127,15 @@ class ContextualVolatilityWrapper:
         self.current_weather = random.choice(list(Weather))
         self.active_beans.clear()
         
-        # Initialize beans from JBW's current state
         self._discover_jbw_items()
         
-        return obs if obs is not None else {}, self._get_context_info()
+        # INJECT WEATHER BEFORE RETURNING
+        obs = self._inject_weather_into_obs(obs if obs is not None else {})
+        return obs, self._get_context_info()
+
 
     def _discover_jbw_items(self):
-        """Discovers items and maps them to our BeanState tracking."""
+        """Discovers items and maps them to our BeanState tracking with pre-ripening."""
         if not self.env: return
         try:
             if hasattr(self.env, 'get_items'):
@@ -117,13 +143,16 @@ class ContextualVolatilityWrapper:
                 # BUG FIX: Handle the Pygame Mock dictionary format
                 if isinstance(items, dict):
                     for pos in items.keys():
-                        self.active_beans[pos] = BeanState.GREEN
+                        # 20% chance to spawn already ripe!
+                        state = BeanState.RED if random.random() < 0.2 else BeanState.GREEN
+                        self.active_beans[pos] = state
                 # Handle the standard JBW C++ object format
                 else:
                     for item in items:
                         if hasattr(item, 'x') and hasattr(item, 'y'):
                             pos = (item.x, item.y)
-                            self.active_beans[pos] = BeanState.GREEN
+                            state = BeanState.RED if random.random() < 0.2 else BeanState.GREEN
+                            self.active_beans[pos] = state
         except Exception as e:
             print(f"Note: Could not auto-discover items: {e}")
 
@@ -181,7 +210,11 @@ class ContextualVolatilityWrapper:
                     
             # Add newly spawned beans to the tracker so they become visible
             for (x, y) in items_added:
-                self.active_beans[(x, y)] = BeanState.GREEN
+                # 20% chance to spawn already ripe so Grey weather isn't a dead-end
+                if random.random() < 0.2:
+                    self.active_beans[(x, y)] = BeanState.RED
+                else:
+                    self.active_beans[(x, y)] = BeanState.GREEN
                 
             # Safely store just the keys for the next frame
             self._last_items = {k: True for k in current_keys}
@@ -190,6 +223,9 @@ class ContextualVolatilityWrapper:
         info.update(self._get_context_info())
         info['bean_states'] = dict(self.active_beans)
         info['weather'] = self.current_weather.name
+
+        # INJECT WEATHER BEFORE RETURNING
+        next_obs = self._inject_weather_into_obs(next_obs)
 
         return next_obs, reward, done, info
 

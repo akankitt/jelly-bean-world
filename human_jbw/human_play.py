@@ -1,6 +1,7 @@
 import pygame
 import random
 import sys
+import math
 import csv
 import os
 import time
@@ -9,9 +10,9 @@ from wrapper import ContextualVolatilityWrapper, BeanState, Weather
 
 # --- CONSTANTS & CONFIG ---
 # Increased Grid Size for better patch-foraging travel distance!
-TILE_SIZE = 35      
-GRID_WIDTH = 20     
-GRID_HEIGHT = 20    
+TILE_SIZE = 25       # Shrunk from 35 so the map fits on your screen
+GRID_WIDTH = 33      # Increased from 20
+GRID_HEIGHT = 33     # Increased from 20
 FPS = 10  
 
 # Colors
@@ -86,6 +87,27 @@ class MockJBWEnv:
 
     def get_items(self):
         return self.items
+    
+    # --- ADD THIS MISSING METHOD ---
+    def _is_location_clear(self, cx, cy, min_distance=7):
+        """
+        Scans the proposed spawn location. 
+        Returns False if there are already beans too close.
+        """
+        for (bx, by) in self.items.keys():
+            # Calculate Manhattan distance to existing beans
+            dist = abs(cx - bx) + abs(cy - by)
+            if dist < min_distance:
+                return False
+        return True
+    # -------------------------------
+
+    # --- ADD THIS NEW METHOD ---
+    def remove_item(self, x, y):
+        """Allows the wrapper to successfully garbage collect rotten beans."""
+        if (x, y) in self.items:
+            del self.items[(x, y)]
+    # ---------------------------
 
     def reset(self):
         self.agent_pos = [GRID_WIDTH // 2, GRID_HEIGHT // 2]
@@ -98,11 +120,50 @@ class MockJBWEnv:
         return {"obs": "dummy"}
 
     def step(self, action):
-        if random.random() < 0.03 and len(self.items) < 80:
-            cx = self.agent_pos[0] + random.choice([-15, -12, 12, 15])
-            cy = self.agent_pos[1] + random.choice([-15, -12, 12, 15])
-            self.spawn_patch(cx, cy)
+        # --- 1. SPATIAL CULLING (Garbage Collection) ---
+        # Delete items that are more than 25 tiles away from the agent.
+        # This prevents the map from filling up with "forgotten" patches behind the player.
+        keys_to_delete = []
+        for (bx, by) in self.items.keys():
+            # Manhattan distance calculation
+            dist = abs(self.agent_pos[0] - bx) + abs(self.agent_pos[1] - by)
+            if dist > 25:
+                keys_to_delete.append((bx, by))
+                
+        for k in keys_to_delete:
+            del self.items[k]
 
+
+        # --- 2. DIRECTIONAL "DONUT" SPAWNING ---
+        # Kept spawn rate at 3% (0.03). Increased cap to 200 for the larger world.
+        if random.random() < 0.03 and len(self.items) < 200:
+            
+            # Pushed the spawn distance out to the edge of the new 33x33 screen
+            distance = random.randint(14, 17) 
+            
+            if action == 0:   # UP
+                cx = self.agent_pos[0] + random.randint(-5, 5)
+                cy = self.agent_pos[1] - distance
+            elif action == 1: # DOWN
+                cx = self.agent_pos[0] + random.randint(-5, 5)
+                cy = self.agent_pos[1] + distance
+            elif action == 2: # LEFT
+                cx = self.agent_pos[0] - distance
+                cy = self.agent_pos[1] + random.randint(-5, 5)
+            elif action == 3: # RIGHT
+                cx = self.agent_pos[0] + distance
+                cy = self.agent_pos[1] + random.randint(-5, 5)
+            else:             # STAY 
+                angle = random.uniform(0, 2 * math.pi)
+                cx = int(self.agent_pos[0] + distance * math.cos(angle))
+                cy = int(self.agent_pos[1] + distance * math.sin(angle))
+                
+            # Smart Fix: Ensure patches don't spawn on top of each other
+            if self._is_location_clear(cx, cy, min_distance=7):
+                self.spawn_patch(cx, cy)
+
+
+        # --- 3. MOVEMENT & REWARD LOGIC ---
         if action == 0: self.agent_pos[1] -= 1
         elif action == 1: self.agent_pos[1] += 1
         elif action == 2: self.agent_pos[0] -= 1
@@ -119,6 +180,7 @@ class MockJBWEnv:
             base_reward += 0 
 
         return {"obs": "dummy"}, base_reward, False, {}
+    
 
 def draw_grid(screen, camera_x, camera_y):
     offset_x = -(camera_x * TILE_SIZE) % TILE_SIZE
@@ -170,21 +232,23 @@ def main():
         logger.log_step(tick, mock_env.get_agent_pos(), action_name, info['weather'], reward)
 
         # --- UPDATED CAMERA MATH ---
-        # screen_x and screen_y represent where the agent is visually on your monitor (0 to 19)
         screen_x = agent_x - camera_x
         screen_y = agent_y - camera_y
 
-        # X-Axis Push: Trigger on 2nd to last column (index 1 or 18). Shift to 4th column (index 3 or 16).
-        if screen_x <= 1:
-            camera_x = agent_x - 3
-        elif screen_x >= GRID_WIDTH - 2:
-            camera_x = agent_x - (GRID_WIDTH - 4)
+        # Give the agent a comfortable "buffer" of 5 tiles from the edge before the camera moves
+        BUFFER = 5
 
-        # Y-Axis Push: Trigger on 2nd to last row. Shift to 4th row.
-        if screen_y <= 1:
-            camera_y = agent_y - 3
-        elif screen_y >= GRID_HEIGHT - 2:
-            camera_y = agent_y - (GRID_HEIGHT - 4)
+        # X-Axis Push
+        if screen_x <= BUFFER:
+            camera_x = agent_x - (BUFFER + 2)
+        elif screen_x >= GRID_WIDTH - BUFFER:
+            camera_x = agent_x - (GRID_WIDTH - BUFFER - 2)
+
+        # Y-Axis Push
+        if screen_y <= BUFFER:
+            camera_y = agent_y - (BUFFER + 2)
+        elif screen_y >= GRID_HEIGHT - BUFFER:
+            camera_y = agent_y - (GRID_HEIGHT - BUFFER - 2)
 
 
         # --- RENDERING ---
