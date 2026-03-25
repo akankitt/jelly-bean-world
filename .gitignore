@@ -22,3 +22,22 @@ vs/x64/
 
 # Swift Package Manager
 **/.build/**/*
+
+# Ignore compiled C extensions
+*.so
+
+# Ignore your local logs and data
+logs/
+*.csv
+
+# Ignore the data collected from humans
+logs/
+*.csv
+
+# Ignore Python's background cache files
+__pycache__/
+*.pyc
+
+# Ignore OS-specific junk
+.DS_Store
+Thumbs.db
