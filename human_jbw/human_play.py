@@ -10,7 +10,7 @@ from wrapper import ContextualVolatilityWrapper, BeanState, Weather
 
 # --- CONSTANTS & CONFIG ---
 # Increased Grid Size for better patch-foraging travel distance!
-TILE_SIZE = 25       # Shrunk from 35 so the map fits on your screen
+TILE_SIZE = 22       # Shrunk from 35 so the map fits on your screen
 GRID_WIDTH = 33      # Increased from 20
 GRID_HEIGHT = 33     # Increased from 20
 FPS = 10  

@@ -79,7 +79,7 @@ class ContextualVolatilityWrapper:
         
         # 2. Contextual Probabilities (The Rules)
         self.context_probs = {
-            Weather.BLUE: {"P_ripen": 0.025,  "P_rot": 0.005},
+            Weather.BLUE: {"P_ripen": 0.025,  "P_rot": 0.008},
             Weather.RED:  {"P_ripen": 0.025,  "P_rot": 0.050},
             # GREY CONTEXT: Zero growth, zero rotting. 
             Weather.GREY: {"P_ripen": 0.0,    "P_rot": 0.0} 
@@ -187,7 +187,6 @@ class ContextualVolatilityWrapper:
         if hasattr(self, '_last_items') and self.env and hasattr(self.env, 'get_items'):
             raw_items = self.env.get_items() if hasattr(self.env, 'get_items') else {}
             
-            # BUG FIX: Extract just the coordinates to prevent Python reference tangles!
             if isinstance(raw_items, dict):
                 current_keys = set(raw_items.keys())
             else:
@@ -201,16 +200,23 @@ class ContextualVolatilityWrapper:
             items_removed = last_keys - current_keys
             items_added = current_keys - last_keys
             
-            # Apply state-based reward modifier for eaten beans
+            # --- THE FIX STARTS HERE ---
+            current_agent_pos = self._get_agent_position()
+            
             for (x, y) in items_removed:
-                modifier = self._get_item_reward_modifier(x, y)
-                reward += modifier
+                # ONLY apply the reward if the agent is standing exactly on the bean
+                if (x, y) == current_agent_pos:
+                    modifier = self._get_item_reward_modifier(x, y)
+                    reward += modifier
+                    
+                # Regardless of WHY it vanished (eaten, rotted, or culled), stop drawing it
                 if (x, y) in self.active_beans:
                     del self.active_beans[(x, y)]
+            # --- THE FIX ENDS HERE ---
                     
             # Add newly spawned beans to the tracker so they become visible
             for (x, y) in items_added:
-                # 20% chance to spawn already ripe so Grey weather isn't a dead-end
+                # 20% chance to spawn already ripe
                 if random.random() < 0.2:
                     self.active_beans[(x, y)] = BeanState.RED
                 else:
@@ -235,14 +241,14 @@ class ContextualVolatilityWrapper:
         Grey (Stagnant) appears much less frequently than Blue or Red.
         """
         if self.current_weather == Weather.BLUE:
-            # If SAFE: 85% chance to become RISKY, only 15% chance to become STAGNANT
+            # If SAFE: 80% chance to become RISKY, only 20% chance to become STAGNANT
             next_states = [Weather.RED, Weather.GREY]
-            weights = [0.85, 0.15] 
+            weights = [0.8, 0.2] 
             
         elif self.current_weather == Weather.RED:
-            # If RISKY: 85% chance to become SAFE, only 15% chance to become STAGNANT
+            # If RISKY: 80% chance to become SAFE, only 20% chance to become STAGNANT
             next_states = [Weather.BLUE, Weather.GREY]
-            weights = [0.85, 0.15]
+            weights = [0.8, 0.2]
             
         else:
             # If STAGNANT (Grey): 50/50 chance to go back to a normal active state
