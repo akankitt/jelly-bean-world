@@ -7,9 +7,10 @@ import os
 import time
 from datetime import datetime
 from enum import Enum
-import numpy as np
 
-# --- ENUMS FOR STATES ---
+# =====================================================================
+# ENUMS & CONSTANTS
+# =====================================================================
 class Weather(Enum):
     BLUE = 0  # Safe and Stable
     RED = 1   # High Risk and Unpredictable
@@ -20,13 +21,11 @@ class BeanState(Enum):
     RED = 1   # Ripe (+10 points)
     BROWN = 2 # Rotten (-10 points)
 
-# --- CONSTANTS & CONFIG ---
 TILE_SIZE = 22       
 GRID_WIDTH = 33      
 GRID_HEIGHT = 33     
 FPS = 10  
 
-# Colors
 COLOR_BG_BLUE = (200, 230, 255)  
 COLOR_BG_RED = (255, 200, 200)   
 COLOR_BG_GREY = (220, 220, 220)  
@@ -35,32 +34,58 @@ COLOR_AGENT = (50, 50, 255)
 COLOR_TEXT = (0, 0, 0)
 
 # =====================================================================
+# TELEMETRY HELPER
+# =====================================================================
+def get_nearest_bean_info(agent_pos, active_beans):
+    """Calculates the Manhattan distance and state of the closest bean."""
+    if not active_beans:
+        return -1, "NONE"
+    
+    min_dist = float('inf')
+    closest_state = "NONE"
+    
+    for (bx, by), state in active_beans.items():
+        dist = abs(agent_pos[0] - bx) + abs(agent_pos[1] - by)
+        if dist < min_dist:
+            min_dist = dist
+            closest_state = state.name # 'GREEN', 'RED', or 'BROWN'
+            
+    return min_dist, closest_state
+
+# =====================================================================
 # 1. DATA LOGGER
 # =====================================================================
 class DataLogger:
-    """Logs human interactions to a CSV file to test psychological hypotheses."""
+    """Logs high-fidelity behavioral telemetry to test psychological hypotheses."""
     def __init__(self, log_folder="logs"):
         self.log_folder = log_folder
         os.makedirs(self.log_folder, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.filepath = os.path.join(self.log_folder, f"human_data_{timestamp}.csv")
         
+        # Expanded Headers for Behavioral Analysis
         with open(self.filepath, mode='w', newline='') as file:
             writer = csv.writer(file)
             writer.writerow([
-                "Timestamp", "Tick", "Agent_X", "Agent_Y", 
-                "Action_Taken", "Current_Weather", "Reward_Received"
+                "Real_Timestamp", "Sim_Tick", 
+                "Agent_X", "Agent_Y", "Action_Taken", 
+                "Current_Weather", "Ticks_In_Weather", 
+                "Nearest_Bean_Dist", "Nearest_Bean_State", 
+                "Tick_Reward", "Total_Score"
             ])
-        print(f"Logging data to: {self.filepath}")
+        print(f"Logging behavioral telemetry to: {self.filepath}")
 
-    def log_step(self, tick, agent_pos, action, weather, reward):
+    def log_step(self, tick, agent_pos, action, weather, ticks_in_weather, 
+                 nearest_dist, nearest_state, reward, total_score):
         with open(self.filepath, mode='a', newline='') as file:
             writer = csv.writer(file)
             writer.writerow([
-                time.time(), tick, agent_pos[0], agent_pos[1], 
-                action, weather, reward
+                round(time.time(), 3), tick, 
+                agent_pos[0], agent_pos[1], action, 
+                weather, ticks_in_weather, 
+                nearest_dist, nearest_state, 
+                round(reward, 1), round(total_score, 1)
             ])
-
 
 # =====================================================================
 # 2. MOCK JBW ENVIRONMENT (The Spawner & Physics)
@@ -68,11 +93,10 @@ class DataLogger:
 class MockJBWEnv:
     def __init__(self):
         self.agent_pos = [GRID_WIDTH // 2, GRID_HEIGHT // 2]
-        self.items = {} # Maps (x,y) -> "GREEN" or "RED" string
+        self.items = {} 
         self._initial_spawn()
 
     def _is_location_clear(self, cx, cy, min_distance):
-        """Prevents patches from overlapping."""
         for (bx, by) in self.items.keys():
             dist = abs(cx - bx) + abs(cy - by)
             if dist < min_distance:
@@ -87,13 +111,12 @@ class MockJBWEnv:
             y = center_y + random.randint(-radius, radius)
             
             if (x, y) not in self.items and [x, y] != self.agent_pos:
-                # Save the explicitly requested state so the wrapper knows what it is
                 self.items[(x, y)] = state 
                 spawned += 1
             attempts += 1
 
     def _initial_spawn(self):
-        # Increased Safe patch to 5 beans, Rich patch to 12 beans
+        # 2AFC Initialization: Safe patch (5 beans), Rich patch (12 beans)
         self.spawn_patch(self.agent_pos[0] + 4, self.agent_pos[1], num_beans=5, radius=1, state="RED")
         self.spawn_patch(self.agent_pos[0] - 15, self.agent_pos[1], num_beans=12, radius=2, state="GREEN")
 
@@ -110,7 +133,7 @@ class MockJBWEnv:
         return {"obs": "dummy"}
 
     def step(self, action, weather="BLUE"):
-        # --- 1. SPATIAL CULLING (Garbage Collection) ---
+        # --- 1. CULLING ---
         keys_to_delete = []
         for (bx, by) in self.items.keys():
             dist = abs(self.agent_pos[0] - bx) + abs(self.agent_pos[1] - by)
@@ -119,37 +142,41 @@ class MockJBWEnv:
         for k in keys_to_delete:
             del self.items[k]
 
-        # --- 2. EXPERIMENTAL SPAWNING (Updated Counts) ---
+        # --- 2. EXPERIMENTAL SPAWNING ---
         if random.random() < 0.03 and len(self.items) < 30: 
             
             if weather == "GREY":
+                # HYPOTHESIS 4: BOREDOM BAIT (Isolated Green Beans)
                 cx = self.agent_pos[0] + random.randint(-15, 15)
                 cy = self.agent_pos[1] + random.randint(-15, 15)
                 if self._is_location_clear(cx, cy, min_distance=2):
-                    self.spawn_patch(cx, cy, num_beans=1, radius=0, state="GREEN")
+                    self.spawn_patch(cx, cy, num_beans=2, radius=1, state="GREEN")
+
+                # HYPOTHESIS 4: BOREDOM BAIT (Isolated Green Beans)
+                cx = self.agent_pos[0] + random.randint(-15, 15)
+                cy = self.agent_pos[1] + random.randint(-15, 15)
+                if self._is_location_clear(cx, cy, min_distance=2):
+                    self.spawn_patch(cx, cy, num_beans=3, radius=1, state="RED")
             
             else:
-                # A. Safe & Close (Increased from 2 to 5-6)
+                # HYPOTHESES 2 & 3: 2AFC
                 angle_safe = random.uniform(0, 2 * math.pi)
-                dist_safe = random.randint(3, 5) 
+                dist_safe = random.randint(4, 7) 
                 cx_safe = int(self.agent_pos[0] + dist_safe * math.cos(angle_safe))
                 cy_safe = int(self.agent_pos[1] + dist_safe * math.sin(angle_safe))
                 
                 if self._is_location_clear(cx_safe, cy_safe, min_distance=6):
-                    # We spawn 5 or 6 beans to give it more 'substance'
                     self.spawn_patch(cx_safe, cy_safe, num_beans=random.randint(5, 6), radius=1, state="RED")
                 
-                # B. Rich & Far (Increased from 10 to 12-14)
                 angle_rich = angle_safe + math.pi 
                 dist_rich = random.randint(15, 20)
                 cx_rich = int(self.agent_pos[0] + dist_rich * math.cos(angle_rich))
                 cy_rich = int(self.agent_pos[1] + dist_rich * math.sin(angle_rich))
                 
-                if self._is_location_clear(cx_rich, cy_rich, min_distance=6):
-                    # Higher reward density to entice the player to travel
-                    self.spawn_patch(cx_rich, cy_rich, num_beans=random.randint(12, 14), radius=2, state="GREEN")
+                if self._is_location_clear(cx_rich, cy_rich, min_distance=8):
+                    self.spawn_patch(cx_rich, cy_rich, num_beans=random.randint(10, 12), radius=2, state="GREEN")
 
-        # --- 3. ZERO-COST IDLING & MOVEMENT ---
+        # --- 3. MOVEMENT & REWARD ---
         if action == 0: self.agent_pos[1] -= 1
         elif action == 1: self.agent_pos[1] += 1
         elif action == 2: self.agent_pos[0] -= 1
@@ -158,7 +185,7 @@ class MockJBWEnv:
         pos_tuple = (self.agent_pos[0], self.agent_pos[1])
         base_reward = 0 
         
-        # Penalize movement, but idling costs 0.
+        # Idle = 0 points. Movement = -0.1 points.
         if action in [0, 1, 2, 3]: 
             base_reward = -0.1 
         
@@ -166,7 +193,6 @@ class MockJBWEnv:
             del self.items[pos_tuple]
 
         return {"obs": "dummy"}, base_reward, False, {}
-
 
 # =====================================================================
 # 3. EXPERIMENTAL WRAPPER (Contexts, Epochs, and States)
@@ -176,23 +202,15 @@ class ContextualVolatilityWrapper:
         self.env = jbw_env 
         self._last_items = {}  
         
-        # 1. Epoch-Based Weather Settings (Testing H1)
+        # 1. Epoch-Based Weather Settings
         self.current_weather = Weather.BLUE
         self.ticks_in_current_weather = 0
-        # Target length of 45-90 seconds at 10 FPS
-        self.current_epoch_target = random.randint(450, 900) 
+        self.current_epoch_target = random.randint(300, 600) 
         
-        # 2. Contextual Probabilities (Corrected for Human Motor Latency)
+        # 2. Contextual Probabilities (Playable Variance)
         self.context_probs = {
-            # BLUE: Safe. 
-            # Very low rot (0.5%). EV for walking across the map is highly positive.
             Weather.BLUE: {"P_ripen": 0.020,  "P_rot": 0.005},
-            
-            # RED: Risky but Playable.
-            # 8% rot per tick. Gives a bean an average lifespan of ~1.2 seconds.
-            Weather.RED:  {"P_ripen": 0.040,  "P_rot": 0.080},
-            
-            # GREY: Stasis.
+            Weather.RED:  {"P_ripen": 0.040,  "P_rot": 0.040}, # 4% per tick rot
             Weather.GREY: {"P_ripen": 0.0,    "P_rot": 0.0} 
         }
         
@@ -205,7 +223,6 @@ class ContextualVolatilityWrapper:
         self.current_epoch_target = random.randint(450, 900)
         self.active_beans.clear()
         
-        # Initial sync
         raw_items = self.env.get_items()
         for pos, state_str in raw_items.items():
             self.active_beans[pos] = BeanState.RED if state_str == "RED" else BeanState.GREEN
@@ -219,12 +236,12 @@ class ContextualVolatilityWrapper:
         if self.ticks_in_current_weather >= self.current_epoch_target:
             self._switch_weather()
             self.ticks_in_current_weather = 0
-            self.current_epoch_target = random.randint(450, 900)
+            self.current_epoch_target = random.randint(300, 600)
 
         # --- 2. RESTLESS RESOURCE LIFECYCLE ---
         self._update_beans_stochastically()
 
-        # --- 3. EXECUTE AGENT ACTION (Pass Weather to Env) ---
+        # --- 3. EXECUTE AGENT ACTION ---
         next_obs, reward, done, info = self.env.step(action, weather=self.current_weather.name)
 
         # --- 4. APPLY REWARDS AND TRACK NEW BEANS ---
@@ -307,7 +324,6 @@ class ContextualVolatilityWrapper:
             "P_rot": self.context_probs[self.current_weather]["P_rot"]
         }
 
-
 # =====================================================================
 # 4. GAME ENGINE & RENDERING
 # =====================================================================
@@ -323,7 +339,7 @@ def draw_grid(screen, camera_x, camera_y):
 def main():
     pygame.init()
     screen = pygame.display.set_mode((GRID_WIDTH * TILE_SIZE, GRID_HEIGHT * TILE_SIZE + 50))
-    pygame.display.set_caption("Contextual Volatility Foraging Task - EXPERIMENTAL RUN")
+    pygame.display.set_caption("Contextual Volatility Foraging Task")
     clock = pygame.time.Clock()
     font = pygame.font.SysFont(None, 24)
 
@@ -354,22 +370,35 @@ def main():
         _, reward, _, info = wrapper.step(action)
         score = round(score + reward, 1)
         tick += 1
-
         agent_x, agent_y = mock_env.get_agent_pos()
-        logger.log_step(tick, mock_env.get_agent_pos(), action_name, info['weather'], reward)
 
-        # Camera constraints
+        # --- BEHAVIORAL TELEMETRY ---
+        nearest_dist, nearest_state = get_nearest_bean_info((agent_x, agent_y), info['bean_states'])
+        ticks_in_weather = wrapper.ticks_in_current_weather
+
+        logger.log_step(
+            tick=tick, 
+            agent_pos=(agent_x, agent_y), 
+            action=action_name, 
+            weather=info['weather'], 
+            ticks_in_weather=ticks_in_weather,
+            nearest_dist=nearest_dist,
+            nearest_state=nearest_state,
+            reward=reward,
+            total_score=score
+        )
+
+        # --- CAMERA BOUNDS ---
         screen_x = agent_x - camera_x
         screen_y = agent_y - camera_y
         BUFFER = 5
 
         if screen_x <= BUFFER: camera_x = agent_x - (BUFFER + 2)
         elif screen_x >= GRID_WIDTH - BUFFER: camera_x = agent_x - (GRID_WIDTH - BUFFER - 2)
-
         if screen_y <= BUFFER: camera_y = agent_y - (BUFFER + 2)
         elif screen_y >= GRID_HEIGHT - BUFFER: camera_y = agent_y - (GRID_HEIGHT - BUFFER - 2)
 
-        # Render Weather Background
+        # --- RENDERING ---
         if info['weather'] == 'BLUE':
             screen.fill(COLOR_BG_BLUE)
             weather_text = "Context: SAFE (Blue) - Positive EV"
@@ -382,7 +411,6 @@ def main():
 
         draw_grid(screen, camera_x, camera_y)
 
-        # Draw Beans
         bean_states = info['bean_states']
         for (bx, by), state in bean_states.items():
             screen_bx = bx - camera_x
@@ -395,13 +423,11 @@ def main():
                 center_y = screen_by * TILE_SIZE + (TILE_SIZE // 2)
                 pygame.draw.circle(screen, pg_color, (center_x, center_y), TILE_SIZE // 3)
 
-        # Draw Agent
         screen_agent_x = agent_x - camera_x
         screen_agent_y = agent_y - camera_y
         rect = pygame.Rect(screen_agent_x * TILE_SIZE + 5, screen_agent_y * TILE_SIZE + 5, TILE_SIZE - 10, TILE_SIZE - 10)
         pygame.draw.rect(screen, COLOR_AGENT, rect)
 
-        # Draw UI
         pygame.draw.rect(screen, (255, 255, 255), (0, GRID_HEIGHT * TILE_SIZE, GRID_WIDTH * TILE_SIZE, 50))
         score_surface = font.render(f"Score: {score}", True, COLOR_TEXT)
         weather_surface = font.render(weather_text, True, COLOR_TEXT)
